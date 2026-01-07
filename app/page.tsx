@@ -112,14 +112,22 @@ export default function Home() {
               <p className="text-xs text-slate-500">
                 Tip: Add multiple names to blend results from each data source.
               </p>
-              <button
-                type="button"
-                onClick={handleSearch}
-                disabled={isLoading}
-                className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isLoading ? "Searching..." : "Search"}
-              </button>
+              <div className="flex items-center gap-3">
+                {isLoading ? (
+                  <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-500" />
+                    Pulling PubMed publications...
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleSearch}
+                  disabled={isLoading}
+                  className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isLoading ? "Searching..." : "Search"}
+                </button>
+              </div>
             </div>
           </section>
 
@@ -154,7 +162,7 @@ export default function Home() {
                         colSpan={6}
                         className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500"
                       >
-                        No results yet. Run a search to preview mock data.
+                        No results yet. Run a search to preview data.
                       </td>
                     </tr>
                   ) : (

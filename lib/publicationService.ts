@@ -80,11 +80,8 @@ export async function fetchPublications(
   startDate?: string,
   endDate?: string,
 ): Promise<Publication[]> {
-  const hasPubMedKeys =
-    Boolean(process.env.NEXT_PUBLIC_PUBMED_API_KEY) &&
-    Boolean(process.env.NEXT_PUBLIC_PUBMED_BASE_URL);
-
-  if (!hasPubMedKeys) {
+  const useMock = process.env.NEXT_PUBLIC_USE_MOCK_PUBLICATIONS === "true";
+  if (useMock) {
     return mockPublications;
   }
 

@@ -95,8 +95,10 @@ export async function POST(request: Request) {
   const { facultyNames, startDate, endDate } =
     (await request.json()) as PubMedSearchRequest;
 
-  const apiKey = process.env.NEXT_PUBLIC_PUBMED_API_KEY;
-  const baseUrl = process.env.NEXT_PUBLIC_PUBMED_BASE_URL;
+  const apiKey =
+    process.env.PUBMED_API_KEY ?? process.env.NEXT_PUBLIC_PUBMED_API_KEY;
+  const baseUrl =
+    process.env.PUBMED_BASE_URL ?? process.env.NEXT_PUBLIC_PUBMED_BASE_URL;
 
   if (!apiKey || !baseUrl) {
     return NextResponse.json(
