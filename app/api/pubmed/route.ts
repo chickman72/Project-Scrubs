@@ -232,10 +232,8 @@ export async function POST(request: Request) {
   const publications = await Promise.all(
     items
       .map((uid) => summaryData.result?.[uid] as ESummaryItem | undefined)
-      .filter(Boolean)
-      .map((item) =>
-        toPublication(item as ESummaryItem, abstracts.get(item.uid) ?? ""),
-      ),
+      .filter((item): item is ESummaryItem => Boolean(item))
+      .map((item) => toPublication(item, abstracts.get(item.uid) ?? "")),
   );
 
   return NextResponse.json({ publications });
