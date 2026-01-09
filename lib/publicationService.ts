@@ -1,4 +1,5 @@
 export type PublicationType = "Primary Research" | "Review";
+export type PublicationSource = "PubMed" | "Scopus" | "Web of Science";
 
 export type Publication = {
   id: string;
@@ -9,6 +10,7 @@ export type Publication = {
   citationCount: number;
   aiPublicationType: PublicationType;
   abstract: string;
+  source: PublicationSource;
 };
 
 const mockPublications: Publication[] = [
@@ -22,6 +24,7 @@ const mockPublications: Publication[] = [
     aiPublicationType: "Primary Research",
     abstract:
       "A multi-site study assessing the impact of simulation-based learning on clinical readiness scores among undergraduate nursing cohorts.",
+    source: "PubMed",
   },
   {
     id: "mock-002",
@@ -33,6 +36,7 @@ const mockPublications: Publication[] = [
     aiPublicationType: "Review",
     abstract:
       "This systematic review synthesizes evidence-based interventions that reduce burnout and improve retention among registered nurses.",
+    source: "PubMed",
   },
   {
     id: "mock-003",
@@ -44,6 +48,7 @@ const mockPublications: Publication[] = [
     aiPublicationType: "Primary Research",
     abstract:
       "A longitudinal cohort analysis measuring telehealth adoption and maternal outcomes across rural health networks.",
+    source: "PubMed",
   },
 ];
 
@@ -61,49 +66,146 @@ const inferPublicationType = (abstract: string): PublicationType => {
 
 export async function classifyPaper(abstract: string): Promise<PublicationType> {
   const {
-    AZURE_OPENAI_ENDPOINT,
-    AZURE_OPENAI_API_KEY,
-    AZURE_OPENAI_DEPLOYMENT_NAME,
+    LITELLM_BASE_URL,
+    LITELLM_API_KEY,
   } = process.env;
 
-  if (!AZURE_OPENAI_ENDPOINT || !AZURE_OPENAI_API_KEY || !AZURE_OPENAI_DEPLOYMENT_NAME) {
-    return inferPublicationType(abstract);
+  if (LITELLM_BASE_URL && LITELLM_API_KEY) {
+    try {
+      const response = await fetch(`${LITELLM_BASE_URL.replace(/\/$/, "")}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LITELLM_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          temperature: 0,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You label abstracts as either Primary Research or Review. Reply with exactly one of those labels.",
+            },
+            {
+              role: "user",
+              content: `Abstract:\\n${abstract}`,
+            },
+          ],
+        }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as {
+          choices?: { message?: { content?: string } }[];
+        };
+        const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+        if (content === "Primary Research" || content === "Review") {
+          return content;
+        }
+      }
+    } catch {
+      // Fall back to heuristic.
+    }
   }
 
-  // TODO: Call Azure OpenAI with AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and
-  // AZURE_OPENAI_DEPLOYMENT_NAME to classify the abstract.
   return inferPublicationType(abstract);
 }
+
+export type PublicationResult = {
+  publications: Publication[];
+  errors: string[];
+};
 
 export async function fetchPublications(
   facultyNames: string[],
   startDate?: string,
   endDate?: string,
-): Promise<Publication[]> {
+): Promise<PublicationResult> {
   const useMock = process.env.NEXT_PUBLIC_USE_MOCK_PUBLICATIONS === "true";
   if (useMock) {
-    return mockPublications;
+    return { publications: mockPublications, errors: [] };
   }
 
-  const response = await fetch("/api/pubmed", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ facultyNames, startDate, endDate }),
-  });
+  const requestBody = JSON.stringify({ facultyNames, startDate, endDate });
+  const headers = { "Content-Type": "application/json" };
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(
-      `PubMed request failed (${response.status}): ${errorBody || "Unknown error"}`,
-    );
+  const [pubmedResult, scopusResult, wosResult] = await Promise.allSettled([
+    fetch("/api/pubmed", { method: "POST", headers, body: requestBody }),
+    fetch("/api/scopus", { method: "POST", headers, body: requestBody }),
+    fetch("/api/wos", { method: "POST", headers, body: requestBody }),
+  ]);
+
+  const errors: string[] = [];
+  const responses: { source: PublicationSource; response: Response }[] = [];
+
+  if (pubmedResult.status === "fulfilled") {
+    responses.push({ source: "PubMed", response: pubmedResult.value });
+  } else {
+    const message =
+      pubmedResult.reason instanceof Error
+        ? pubmedResult.reason.message
+        : "Network error";
+    errors.push(`PubMed request failed: ${message}`);
   }
 
-  const data = (await response.json()) as { publications?: Publication[] };
-  const publications = data.publications ?? [];
+  if (scopusResult.status === "fulfilled") {
+    responses.push({ source: "Scopus", response: scopusResult.value });
+  } else {
+    const message =
+      scopusResult.reason instanceof Error
+        ? scopusResult.reason.message
+        : "Network error";
+    errors.push(`Scopus request failed: ${message}`);
+  }
 
-  // TODO: Fetch Scopus publications using SCOPUS_BASE_URL and SCOPUS_API_KEY.
-  // TODO: Fetch Web of Science publications using WOS_BASE_URL and WOS_API_KEY.
+  if (wosResult.status === "fulfilled") {
+    responses.push({ source: "Web of Science", response: wosResult.value });
+  } else {
+    const message =
+      wosResult.reason instanceof Error
+        ? wosResult.reason.message
+        : "Network error";
+    errors.push(`Web of Science request failed: ${message}`);
+  }
+
+  if (responses.length === 0) {
+    return {
+      publications: [],
+      errors: errors.length > 0 ? errors : ["Unable to reach any data source."],
+    };
+  }
+
+  const publications: Publication[] = [];
+
+  for (const { source, response } of responses) {
+    if (!response.ok) {
+      const errorBody = await response.text();
+      errors.push(
+        `${source} request failed (${response.status}): ${errorBody || "Unknown error"}`,
+      );
+      continue;
+    }
+    const data = (await response.json()) as { publications?: Publication[] };
+    publications.push(...(data.publications ?? []));
+  }
+
+  if (publications.length === 0 && errors.length > 0) {
+    return { publications: [], errors };
+  }
+
+  const seen = new Set<string>();
+  const deduped: Publication[] = [];
+  for (const publication of publications) {
+    const key = `${publication.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}|${publication.date}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(publication);
+  }
+
   // TODO: Merge, dedupe, and enrich results with citations and AI classifications.
 
-  return publications;
+  return { publications: deduped, errors };
 }

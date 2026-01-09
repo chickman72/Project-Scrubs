@@ -143,11 +143,16 @@ export default function FacultyProfilesPage() {
   const updateMetrics = async (profile: FacultyProfile) => {
     setLoadingIds((prev) => [...prev, profile.id]);
     try {
-      const publications = await fetchPublications([profile.name]);
+      const { publications, errors } = await fetchPublications([profile.name]);
       const metrics = calculateMetrics(publications);
       setProfiles((prev) =>
         prev.map((item) => (item.id === profile.id ? { ...item, ...metrics } : item)),
       );
+      if (errors.length > 0) {
+        setGlobalStatus(errors.join(" "));
+      } else {
+        setGlobalStatus(null);
+      }
     } finally {
       setLoadingIds((prev) => prev.filter((id) => id !== profile.id));
     }
@@ -211,7 +216,7 @@ export default function FacultyProfilesPage() {
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h4 className="text-lg font-semibold text-slate-900">Add Faculty</h4>
               <p className="mt-2 text-sm text-slate-500">
-                Store core details locally and sync metrics with PubMed on demand.
+                Store core details locally and sync metrics across supported sources.
               </p>
               <div className="mt-6 space-y-4">
                 <div>

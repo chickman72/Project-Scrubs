@@ -20,7 +20,7 @@ export default function Home() {
   const [search, setSearch] = useState<SearchState>(initialSearch);
   const [results, setResults] = useState<Publication[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessages, setErrorMessages] = useState<string[]>([]);
 
   const handleChange = (field: keyof SearchState, value: string) => {
     setSearch((prev) => ({ ...prev, [field]: value }));
@@ -33,17 +33,22 @@ export default function Home() {
       .filter(Boolean);
 
     setIsLoading(true);
-    setErrorMessage(null);
+    setErrorMessages([]);
     try {
-      const data = await fetchPublications(names, search.startDate, search.endDate);
-      setResults(data);
-      if (data.length === 0) {
-        setErrorMessage("No PubMed results found for the selected filters.");
+      const { publications, errors } = await fetchPublications(
+        names,
+        search.startDate,
+        search.endDate,
+      );
+      setResults(publications);
+      setErrorMessages(errors);
+      if (publications.length === 0 && errors.length === 0) {
+        setErrorMessages(["No results found for the selected filters."]);
       }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to fetch publications.";
-      setErrorMessage(message);
+      setErrorMessages([message]);
       setResults([]);
     } finally {
       setIsLoading(false);
@@ -116,7 +121,7 @@ export default function Home() {
                 {isLoading ? (
                   <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
                     <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-500" />
-                    Pulling PubMed publications...
+                    Pulling PubMed, Scopus, and Web of Science publications...
                   </div>
                 ) : null}
                 <button
@@ -138,9 +143,11 @@ export default function Home() {
                 {results.length} publication{results.length === 1 ? "" : "s"}
               </span>
             </div>
-            {errorMessage ? (
+            {errorMessages.length > 0 ? (
               <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                {errorMessage}
+                {errorMessages.map((message) => (
+                  <p key={message}>{message}</p>
+                ))}
               </div>
             ) : null}
             <div className="overflow-x-auto">
@@ -150,6 +157,7 @@ export default function Home() {
                     <th className="px-4 py-2">Title</th>
                     <th className="px-4 py-2">Authors</th>
                     <th className="px-4 py-2">Journal</th>
+                    <th className="px-4 py-2">Source</th>
                     <th className="px-4 py-2">Date</th>
                     <th className="px-4 py-2">Citation Count</th>
                     <th className="px-4 py-2">AI Publication Type</th>
@@ -159,7 +167,7 @@ export default function Home() {
                   {results.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500"
                       >
                         No results yet. Run a search to preview data.
@@ -176,6 +184,7 @@ export default function Home() {
                         </td>
                         <td className="px-4 py-3">{publication.authors}</td>
                         <td className="px-4 py-3">{publication.journal}</td>
+                        <td className="px-4 py-3">{publication.source}</td>
                         <td className="px-4 py-3">{publication.date}</td>
                         <td className="px-4 py-3 text-center">
                           {publication.citationCount}

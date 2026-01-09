@@ -88,6 +88,7 @@ const toPublication = async (
     citationCount: 0,
     aiPublicationType,
     abstract,
+    source: "PubMed",
   };
 };
 
