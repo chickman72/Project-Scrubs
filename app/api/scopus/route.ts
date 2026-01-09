@@ -120,18 +120,17 @@ export async function POST(request: Request) {
 
   const yearFilter = buildYearFilter(startDate, endDate);
   const query = yearFilter ? `${authorQuery} AND ${yearFilter}` : authorQuery;
+  const searchParams = new URLSearchParams({
+    query,
+    view: "COMPLETE",
+    count: "25",
+  });
   const requestUrl = `${baseUrl}/search/scopus?${searchParams.toString()}`;
 
   console.log(`${logPrefix} Query built`, {
     query,
     yearFilter,
     requestUrl,
-  });
-
-  const searchParams = new URLSearchParams({
-    query,
-    view: "COMPLETE",
-    count: "25",
   });
 
   const fetchWithTimeout = async (url: string, timeoutMs = 25000) => {
