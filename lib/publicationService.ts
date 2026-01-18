@@ -145,6 +145,12 @@ type ScopusSearchResponse = {
 type WosDocument = {
   uid?: string;
   UID?: string;
+  title?: string;
+  source?: Record<string, unknown>;
+  names?: Record<string, unknown>;
+  links?: Record<string, unknown>;
+  citations?: unknown;
+  identifiers?: Record<string, unknown>;
   static_data?: Record<string, unknown>;
   dynamic_data?: Record<string, unknown>;
 };
@@ -682,7 +688,7 @@ export async function fetchFromWoS(authorName: string): Promise<Publication[]> {
         const citationCount = Number.parseInt(citationCountText ?? "0", 10) || 0;
 
         const identifiers = document.identifiers as Record<string, unknown> | undefined;
-        const doi = getFirstTextValue([identifiers?.doi, identifiers?.DOI]);
+        const doi = getFirstTextValue([identifiers?.doi, identifiers?.DOI]) ?? undefined;
         const links = document.links as Record<string, unknown> | undefined;
         const recordUrl = getFirstTextValue([links?.record]);
 
