@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import { fetchPublications, type Publication } from "@/lib/publicationService";
+import { fetchiCiteData } from "@/lib/iCiteService";
+import { MetricsEngine } from "@/lib/metricsEngine";
+import { benchmarks } from "@/lib/benchmarks";
 import Sidebar from "@/components/Sidebar";
+import ResultsTable from "@/components/ResultsTable";
 
 type SearchState = {
   startDate: string;
@@ -21,6 +25,12 @@ export default function Home() {
   const [results, setResults] = useState<Publication[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessages, setErrorMessages] = useState<string[]>([]);
+  const [summaryMetrics, setSummaryMetrics] = useState<{
+    hIndex: number;
+    weightedRcr: number;
+    rcrCount: number;
+    pubmedCount: number;
+  } | null>(null);
 
   const handleChange = (field: keyof SearchState, value: string) => {
     setSearch((prev) => ({ ...prev, [field]: value }));
@@ -34,14 +44,34 @@ export default function Home() {
 
     setIsLoading(true);
     setErrorMessages([]);
+    setSummaryMetrics(null);
     try {
       const { publications, errors } = await fetchPublications(
         names,
         search.startDate,
         search.endDate,
       );
-      setResults(publications);
+      const pubmedPmids = publications
+        .filter((publication) => publication.sources?.includes("PubMed") || publication.source === "PubMed")
+        .map((publication) => publication.id);
+      const rcrMap = await fetchiCiteData(pubmedPmids);
+      let rcrCount = 0;
+      const enrichedPublications = publications.map((publication) => {
+        if (publication.sources?.includes("PubMed") || publication.source === "PubMed") {
+          const rcr = rcrMap.get(publication.id);
+          if (typeof rcr === "number") {
+            rcrCount += 1;
+            return { ...publication, rcr };
+          }
+        }
+        return publication;
+      });
+      const pubmedCount = pubmedPmids.length;
+      const hIndex = MetricsEngine.calculateHIndex(enrichedPublications);
+      const weightedRcr = MetricsEngine.calculateWeightedRCR(enrichedPublications);
+      setResults(enrichedPublications);
       setErrorMessages(errors);
+      setSummaryMetrics({ hIndex, weightedRcr, rcrCount, pubmedCount });
       if (publications.length === 0 && errors.length === 0) {
         setErrorMessages(["No results found for the selected filters."]);
       }
@@ -136,6 +166,58 @@ export default function Home() {
             </div>
           </section>
 
+          {summaryMetrics ? (
+            <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">Summary</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Aggregated impact metrics across all returned publications.
+                  </p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">H-Index</p>
+                    <p className="text-2xl font-semibold text-slate-900">{summaryMetrics.hIndex}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">
+                      Weighted RCR
+                    </p>
+                    <p className="text-2xl font-semibold text-slate-900">
+                      {summaryMetrics.weightedRcr.toFixed(2)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {summaryMetrics.rcrCount}/{summaryMetrics.pubmedCount} PubMed papers matched in iCite
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 text-sm text-slate-600 lg:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Tenure Track Benchmarks
+                  </p>
+                  <p className="mt-2">
+                    Assistant: h={benchmarks.tenureTrack.assistant.hIndex} · Associate:
+                    h={benchmarks.tenureTrack.associate.hIndex} · Professor:
+                    h={benchmarks.tenureTrack.professor.hIndex}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Non-Tenure Benchmarks
+                  </p>
+                  <p className="mt-2">
+                    Assistant: h={benchmarks.nonTenure.assistant.hIndex} · Associate:
+                    h={benchmarks.nonTenure.associate.hIndex} · Professor:
+                    h={benchmarks.nonTenure.professor.hIndex}
+                  </p>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-slate-900">Results</h3>
@@ -150,52 +232,7 @@ export default function Home() {
                 ))}
               </div>
             ) : null}
-            <div className="overflow-x-auto">
-              <table className="min-w-full border-separate border-spacing-y-2 text-left text-sm">
-                <thead className="text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-2">Title</th>
-                    <th className="px-4 py-2">Authors</th>
-                    <th className="px-4 py-2">Journal</th>
-                    <th className="px-4 py-2">Source</th>
-                    <th className="px-4 py-2">Date</th>
-                    <th className="px-4 py-2">Citation Count</th>
-                    <th className="px-4 py-2">AI Publication Type</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={7}
-                        className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500"
-                      >
-                        No results yet. Run a search to preview data.
-                      </td>
-                    </tr>
-                  ) : (
-                    results.map((publication) => (
-                      <tr
-                        key={publication.id}
-                        className="rounded-lg bg-slate-50/70 text-slate-700 shadow-sm"
-                      >
-                        <td className="px-4 py-3 font-semibold text-slate-900">
-                          {publication.title}
-                        </td>
-                        <td className="px-4 py-3">{publication.authors}</td>
-                        <td className="px-4 py-3">{publication.journal}</td>
-                        <td className="px-4 py-3">{publication.source}</td>
-                        <td className="px-4 py-3">{publication.date}</td>
-                        <td className="px-4 py-3 text-center">
-                          {publication.citationCount}
-                        </td>
-                        <td className="px-4 py-3">{publication.aiPublicationType}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <ResultsTable publications={results} />
           </section>
         </main>
       </div>

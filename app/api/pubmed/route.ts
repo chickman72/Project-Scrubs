@@ -9,6 +9,7 @@ type PubMedSearchRequest = {
 
 type ESearchResponse = {
   esearchresult?: {
+    count?: string;
     idlist?: string[];
   };
 };
@@ -78,6 +79,7 @@ const toPublication = async (
   abstract: string,
 ): Promise<Publication> => {
   const aiPublicationType = await classifyPaper(abstract);
+  const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${item.uid}/`;
 
   return {
     id: item.uid,
@@ -89,6 +91,8 @@ const toPublication = async (
     aiPublicationType,
     abstract,
     source: "PubMed",
+    url: pubmedUrl,
+    sourceUrls: { PubMed: pubmedUrl },
   };
 };
 
@@ -113,25 +117,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ publications: [] });
   }
 
-  const searchParams = new URLSearchParams({
-    db: "pubmed",
-    term,
-    retmax: "25",
-    retmode: "json",
-    api_key: apiKey,
-  });
+  const buildSearchParams = (retstart: number, retmax: number) => {
+    const params = new URLSearchParams({
+      db: "pubmed",
+      term,
+      retmax: retmax.toString(),
+      retstart: retstart.toString(),
+      retmode: "json",
+      api_key: apiKey,
+    });
+    if (startDate) {
+      params.set("mindate", startDate);
+      params.set("datetype", "pdat");
+    }
+    if (endDate) {
+      params.set("maxdate", endDate);
+      params.set("datetype", "pdat");
+    }
+    return params;
+  };
 
-  if (startDate) {
-    searchParams.set("mindate", startDate);
-    searchParams.set("datetype", "pdat");
-  }
-
-  if (endDate) {
-    searchParams.set("maxdate", endDate);
-    searchParams.set("datetype", "pdat");
-  }
-
-  const fetchWithTimeout = async (url: string, timeoutMs = 25000) => {
+  const fetchWithTimeout = async (url: string, timeoutMs = 60000) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -141,7 +147,7 @@ export async function POST(request: Request) {
     }
   };
 
-  const fetchWithRetry = async (url: string, attempts = 3) => {
+  const fetchWithRetry = async (url: string, attempts = 5) => {
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
@@ -155,8 +161,9 @@ export async function POST(request: Request) {
 
   let searchResponse: Response;
   try {
+    const initialParams = buildSearchParams(0, 0);
     searchResponse = await fetchWithRetry(
-      `${baseUrl}/esearch.fcgi?${searchParams.toString()}`,
+      `${baseUrl}/esearch.fcgi?${initialParams.toString()}`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Fetch failed";
@@ -173,71 +180,99 @@ export async function POST(request: Request) {
   }
 
   const searchData = (await searchResponse.json()) as ESearchResponse;
-  const ids = searchData.esearchresult?.idlist ?? [];
+  const count = Number.parseInt(searchData.esearchresult?.count ?? "0", 10) || 0;
 
-  if (ids.length === 0) {
+  if (count === 0) {
     return NextResponse.json({ publications: [] });
   }
 
-  const summaryParams = new URLSearchParams({
-    db: "pubmed",
-    id: ids.join(","),
-    retmode: "json",
-    api_key: apiKey,
-  });
+  const batchSize = 50;
+  const publications: Publication[] = [];
+  for (let retstart = 0; retstart < count; retstart += batchSize) {
+    let pageResponse: Response;
+    try {
+      const pageParams = buildSearchParams(retstart, batchSize);
+      pageResponse = await fetchWithRetry(
+        `${baseUrl}/esearch.fcgi?${pageParams.toString()}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Fetch failed";
+      console.error("PubMed search batch failed", { retstart, message });
+      continue;
+    }
 
-  let summaryResponse: Response;
-  try {
-    summaryResponse = await fetchWithRetry(
-      `${baseUrl}/esummary.fcgi?${summaryParams.toString()}`,
+    if (!pageResponse.ok) {
+      console.error("PubMed search batch failed", {
+        retstart,
+        status: pageResponse.status,
+      });
+      continue;
+    }
+
+    const pageData = (await pageResponse.json()) as ESearchResponse;
+    const ids = pageData.esearchresult?.idlist ?? [];
+    if (ids.length === 0) {
+      continue;
+    }
+
+    const summaryParams = new URLSearchParams({
+      db: "pubmed",
+      id: ids.join(","),
+      retmode: "json",
+      api_key: apiKey,
+    });
+
+    let summaryResponse: Response;
+    try {
+      summaryResponse = await fetchWithRetry(
+        `${baseUrl}/esummary.fcgi?${summaryParams.toString()}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Fetch failed";
+      console.error("PubMed summary batch failed", { retstart, message });
+      continue;
+    }
+
+    if (!summaryResponse.ok) {
+      console.error("PubMed summary batch failed", {
+        retstart,
+        status: summaryResponse.status,
+      });
+      continue;
+    }
+
+    const summaryData = (await summaryResponse.json()) as ESummaryResponse;
+    const items = summaryData.result?.uids ?? [];
+    const fetchParams = new URLSearchParams({
+      db: "pubmed",
+      id: ids.join(","),
+      retmode: "xml",
+      api_key: apiKey,
+    });
+
+    let fetchResponse: Response | null = null;
+    try {
+      fetchResponse = await fetchWithRetry(
+        `${baseUrl}/efetch.fcgi?${fetchParams.toString()}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Fetch failed";
+      console.error("PubMed abstract batch failed", { retstart, message });
+    }
+
+    const abstracts = fetchResponse && fetchResponse.ok
+      ? parseAbstracts(await fetchResponse.text())
+      : new Map<string, string>();
+
+    const pagePublications = await Promise.all(
+      items
+        .map((uid) => summaryData.result?.[uid] as ESummaryItem | undefined)
+        .filter((item): item is ESummaryItem => Boolean(item))
+        .map((item) => toPublication(item, abstracts.get(item.uid) ?? "")),
     );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Fetch failed";
-    return NextResponse.json(
-      { error: `PubMed summary timed out: ${message}` },
-      { status: 504 },
-    );
+
+    publications.push(...pagePublications);
   }
-
-  if (!summaryResponse.ok) {
-    return NextResponse.json(
-      { error: "PubMed summary fetch failed." },
-      { status: summaryResponse.status },
-    );
-  }
-
-  const summaryData = (await summaryResponse.json()) as ESummaryResponse;
-  const items = summaryData.result?.uids ?? [];
-  const fetchParams = new URLSearchParams({
-    db: "pubmed",
-    id: ids.join(","),
-    retmode: "xml",
-    api_key: apiKey,
-  });
-
-  let fetchResponse: Response | null = null;
-  try {
-    fetchResponse = await fetchWithRetry(
-      `${baseUrl}/efetch.fcgi?${fetchParams.toString()}`,
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Fetch failed";
-    return NextResponse.json(
-      { error: `PubMed abstract timed out: ${message}` },
-      { status: 504 },
-    );
-  }
-
-  const abstracts = fetchResponse && fetchResponse.ok
-    ? parseAbstracts(await fetchResponse.text())
-    : new Map<string, string>();
-
-  const publications = await Promise.all(
-    items
-      .map((uid) => summaryData.result?.[uid] as ESummaryItem | undefined)
-      .filter((item): item is ESummaryItem => Boolean(item))
-      .map((item) => toPublication(item, abstracts.get(item.uid) ?? "")),
-  );
 
   return NextResponse.json({ publications });
 }
